@@ -1040,6 +1040,43 @@ write_entry_backend(struct bsdtar *bsdtar, struct archive *a,
 	}
 
 	/*
+	 * If the user requested it, check cached hash values against re-read
+	 * data from disk.  Note: if (filecached==1) then the filesize is
+	 * equal to the sum of all cache chunks + trailer are equal.
+	 */
+	if (bsdtar->option_probability_check_file_set &&
+	    (archive_entry_size(entry) > 0) && (filecached == 1) &&
+	    (rand() < bsdtar->probability_check_file * RAND_MAX)) {
+		/* Open file for reading. */
+		const char *pathname = archive_entry_sourcepath(entry);
+		fd = open(pathname, O_RDONLY);
+		if (fd == -1) {
+			if (!bsdtar->verbose)
+				bsdtar_warnc(bsdtar, errno,
+				    "%s: could not open file", pathname);
+			else
+				fprintf(stderr, ": %s", strerror(errno));
+			return;
+		}
+
+		/* Check file data with cached hashes and trailer. */
+		switch (ccache_entry_check_file(cce, fd)) {
+		case 0:
+			close(fd);
+		case 1:
+			close(fd);
+			bsdtar_errc(bsdtar, 1, 0,
+			    "Cached hashes or trailer does not agree with %s",
+			    pathname);
+		case -1:
+			close(fd);
+			bsdtar_errc(bsdtar, 1, 0,
+			    "Error occurred while comparing cached hashes "
+			    "of %s", pathname);
+		}
+	}
+
+	/*
 	 * Open the file if we need to write archive entry data and the
 	 * chunkification cache can't provide all of it.
 	 */
