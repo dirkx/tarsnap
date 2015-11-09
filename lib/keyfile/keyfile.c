@@ -360,6 +360,7 @@ err0:
  * keyfile_read(filename, machinenum, keys):
  * Read keys from a tarsnap key file; and return the machine # via the
  * provided pointer.  Ignore any keys not specified in the ${keys} mask.
+ * Return 0 on success, 1 if file-not-found, -1 on other errors.
  */
 int
 keyfile_read(const char * filename, uint64_t * machinenum, int keys)
@@ -367,10 +368,14 @@ keyfile_read(const char * filename, uint64_t * machinenum, int keys)
 	struct stat sb;
 	uint8_t * keybuf;
 	FILE * f;
+	int stat_errno;
 
 	/* Stat the file. */
 	if (stat(filename, &sb)) {
+		stat_errno = errno;
 		warnp("stat(%s)", filename);
+		if (stat_errno == ENOENT)
+			goto notfound;
 		goto err0;
 	}
 
@@ -420,6 +425,10 @@ keyfile_read(const char * filename, uint64_t * machinenum, int keys)
 
 	/* Success! */
 	return (0);
+
+notfound:
+	/* Failure! */
+	return (1);
 
 err2:
 	fclose(f);
