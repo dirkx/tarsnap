@@ -112,7 +112,8 @@ static int		 configfile_helper(struct bsdtar *bsdtar,
 			     const char *line);
 static void		 dooption(struct bsdtar *, const char *,
 			     const char *, int);
-static void		 load_keys(struct bsdtar *, const char *path);
+static int		 load_keys(struct bsdtar *, const char *path,
+			     int fromconffile);
 static void		 long_help(struct bsdtar *);
 static void		 only_mode(struct bsdtar *, const char *opt,
 			     const char *valid);
@@ -867,6 +868,19 @@ main(int argc, char **argv)
 		only_mode(bsdtar, "--strip-components", "xt");
 
 	/*
+	 * If the keyfile in the config file is invalid but we're doing a
+	 * dryrun, continue anyway (and don't use a cachedir).
+	 */
+	if (bsdtar->config_file_keyfile_failed && bsdtar->option_dryrun &&
+	    bsdtar->cachedir != NULL) {
+		bsdtar_warnc(bsdtar, 0,
+		    "Ignoring cachedir due to missing or invalid "
+		    "keyfile in config file.");
+		free(bsdtar->cachedir);
+		bsdtar->cachedir = NULL;
+	}
+
+	/*
 	 * Canonicalize the path to the cache directories.  This is
 	 * necessary since the tar code can change directories.
 	 */
@@ -1453,8 +1467,9 @@ dooption(struct bsdtar *bsdtar, const char * conf_opt,
 		if (conf_arg == NULL)
 			goto needarg;
 
-		load_keys(bsdtar, conf_arg);
-		bsdtar->have_keys = 1;
+		if (load_keys(bsdtar, conf_arg, fromconffile) == 0) {
+			bsdtar->have_keys = 1;
+		}
 	} else if (strcmp(conf_opt, "lowmem") == 0) {
 		if (bsdtar->mode != 'c')
 			goto badmode;
@@ -1688,16 +1703,33 @@ badopt:
 	    "Unrecognized configuration file option: \"%s\"", conf_opt);
 }
 
-/* Load keys from the specified file. */
-static void
-load_keys(struct bsdtar *bsdtar, const char *path)
+/*
+ * Load keys from the specified file.  Return success or file-not-found; exits
+ * directly if a non-recoverable failure is encountered.
+ */
+static int
+load_keys(struct bsdtar *bsdtar, const char *path, int fromconffile)
 {
 	uint64_t machinenum;
+	int rc = 1;
 
 	/* Load the key file. */
-	if (keyfile_read(path, &machinenum, ~0))
+	switch (keyfile_read(path, &machinenum, ~0)) {
+	case 0:
+		break;
+	case 1: /* file not found */
+		if ((fromconffile) && (bsdtar->option_dryrun)) {
+			bsdtar_warnc(bsdtar, errno,
+			    "Cannot read key file: %s\n         "
+			    "but continuing anyway with dry-run.", path);
+			bsdtar->config_file_keyfile_failed = 1;
+			goto err0;
+		}
+		/* FALLTHROUGH */
+	case -1:
 		bsdtar_errc(bsdtar, 1, errno,
 		    "Cannot read key file: %s", path);
+	}
 
 	/* Check the machine number. */
 	if ((bsdtar->machinenum != (uint64_t)(-1)) &&
@@ -1705,6 +1737,13 @@ load_keys(struct bsdtar *bsdtar, const char *path)
 		bsdtar_errc(bsdtar, 1, 0,
 		    "Key file belongs to wrong machine: %s", path);
 	bsdtar->machinenum = machinenum;
+
+	/* Success! */
+	return (0);
+
+err0:
+	/* Failure! */
+	return (rc);
 }
 
 static int
