@@ -1,8 +1,10 @@
 #include "bsdtar_platform.h"
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "chunks.h"
 #include "ctassert.h"
@@ -91,20 +93,41 @@ err0:
 }
 
 /**
- * statstape_printglobal(d):
- * Print global statistics relating to a set of archives.
+ * statstape_printglobal(d, csv_filename):
+ * Print global statistics relating to a set of archives.  If ${csv_filename}
+ * is not NULL, output will be written in CSV format to that filename.
  */
 int
-statstape_printglobal(TAPE_S * d)
+statstape_printglobal(TAPE_S * d, const char * csv_filename)
 {
+	FILE * output = stdout;
+	int csv = 0;
+
+	/* Should we output to a CSV file? */
+	if (csv_filename != NULL)
+		csv = 1;
+
+	/* Open CSV output file, if requested. */
+	if (csv && (output = fopen(csv_filename, "wt")) == NULL)
+		goto err0;
 
 	/* Ask the chunk storage layer to do this. */
-	if (chunks_stats_printglobal(stdout, d->C, 0))
-		goto err0;
+	if (chunks_stats_printglobal(output, d->C, csv))
+		goto err2;
+
+	/* Close CSV output file, if requested. */
+	if (csv && fclose(output))
+		goto err1;
 
 	/* Success! */
 	return (0);
 
+err2:
+	if (csv)
+		fclose(output);
+err1:
+	if (csv)
+		unlink(csv_filename);
 err0:
 	/* Failure! */
 	return (-1);
