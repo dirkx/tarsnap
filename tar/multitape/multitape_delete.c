@@ -60,15 +60,18 @@ err0:
 }
 
 /**
- * deletetape(d, machinenum, cachedir, tapename, printstats, withname):
+ * deletetape(d, machinenum, cachedir, tapename, printstats, withname,
+ *     csv_filename):
  * Delete the specified tape, and print statistics to stderr if requested.
  * If ${withname} is non-zero, print statistics with the archive name, not
  * just as "This archive".  Return 0 on success, 1 if the tape does not exist,
- * or -1 on other errors.
+ * or -1 on other errors.  If ${csv_filename} is specified, output in CSV
+ * format instead of to stderr.
  */
 int
 deletetape(TAPE_D * d, uint64_t machinenum, const char * cachedir,
-    const char * tapename, int printstats, int withname)
+    const char * tapename, int printstats, int withname,
+    const char * csv_filename)
 {
 	struct tapemetadata tmd;
 	CHUNKS_D * C;		/* Chunk layer delete cookie. */
@@ -78,6 +81,12 @@ deletetape(TAPE_D * d, uint64_t machinenum, const char * cachedir,
 	uint8_t lastseq[32];
 	uint8_t seqnum[32];
 	int rc = -1;		/* Presume error was not !found. */
+	FILE * output = stderr;
+	int csv = 0;
+
+	/* Should we output to a CSV file? */
+	if (csv_filename != NULL)
+		csv = 1;
 
 	/* Lock the cache directory. */
 	if ((lockfd = multitape_lock(cachedir)) == -1)
@@ -131,9 +140,30 @@ deletetape(TAPE_D * d, uint64_t machinenum, const char * cachedir,
 		goto err3;
 
 	/* Print statistics if they were requested. */
-	if ((printstats != 0) &&
-	    chunks_delete_printstats(stderr, C, withname ? tapename : NULL, 0))
-		goto err3;
+	if (printstats != 0) {
+		if (csv && (output = fopen(csv_filename, "wt")) == NULL)
+			goto err3;
+
+		/* Actually print statistics. */
+	    	if (chunks_delete_printstats(output, C,
+		    withname ? tapename : NULL, csv)) {
+			/* We can't call
+			 *   multitape_metadata_free(&tmd);
+			 * twice, so we're doing the cleanup here and jumping
+			 * to err3.
+			 */
+			if (csv) {
+				fclose(output);
+				unlink(csv_filename);
+			}
+			goto err3;
+		}
+
+		if (csv && fclose(output)) {
+			unlink(csv_filename);
+			goto err3;
+		}
+	}
 
 	/* Close storage and chunk layer cookies. */
 	if (chunks_delete_end(C))
